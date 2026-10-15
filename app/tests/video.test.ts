@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import { auditSongsFolder } from '../src/main/core/video/audit.ts'
+import { cleanLeftovers } from '../src/main/core/video/clean.ts'
 import { readVideoStartTime, writeVideoStartTime } from '../src/main/core/video/songini.ts'
 
 let root: string
@@ -119,5 +120,24 @@ describe('audit', () => {
     assert.deepEqual(issuesOf(leftovers), ['no-video', 'leftover-download-files'])
     assert.deepEqual(issuesOf(mp4), ['needs-vp8-webm'])
     assert.deepEqual(issuesOf(both), ['multiple-video-files', 'needs-vp8-webm', 'no-start-time'])
+  })
+})
+
+describe('clean', () => {
+  it('removes download fragments, keeps real videos and backups, honors dry run', async () => {
+    const folder = makeSong('clean/song', '[song]\n')
+    for (const name of ['video.webm', 'video.f137.mp4.part', 'video.temp.mp4', 'video.f140.m4a', 'video.mp4.bak']) {
+      writeFileSync(join(folder, name), 'x')
+    }
+    const cleanRoot = join(root, 'clean')
+    const dry = await cleanLeftovers(cleanRoot, { dryRun: true })
+    assert.equal(dry.removed.length, 3)
+    assert.equal(existsSync(join(folder, 'video.temp.mp4')), true)
+    const real = await cleanLeftovers(cleanRoot)
+    assert.equal(real.removed.length, 3)
+    assert.deepEqual(real.keptBackups, [join(folder, 'video.mp4.bak')])
+    assert.equal(existsSync(join(folder, 'video.temp.mp4')), false)
+    assert.equal(existsSync(join(folder, 'video.webm')), true)
+    assert.equal(existsSync(join(folder, 'video.mp4.bak')), true)
   })
 })
