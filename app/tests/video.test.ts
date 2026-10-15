@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
+import { auditSongsFolder } from '../src/main/core/video/audit.ts'
 import { readVideoStartTime, writeVideoStartTime } from '../src/main/core/video/songini.ts'
 
 let root: string
@@ -98,5 +99,25 @@ describe('song.ini video_start_time', () => {
 
   it('returns null when missing', async () => {
     assert.equal(await readVideoStartTime(makeSong('ini-missing')), null)
+  })
+})
+
+describe('audit', () => {
+  it('reports each problem class', async () => {
+    const none = makeSong('audit/none')
+    const mp4 = makeSong('audit/mp4', '[song]\nvideo_start_time = 0\n')
+    makeVideo(join(mp4, 'video.mp4'), H264)
+    const both = makeSong('audit/both')
+    makeVideo(join(both, 'video.mp4'), H264)
+    makeVideo(join(both, 'video.webm'), ['-c:v', 'libvpx', '-an'])
+    const leftovers = makeSong('audit/leftovers', '[song]\nvideo_start_time = 0\n')
+    writeFileSync(join(leftovers, 'video.f137.mp4.part'), 'x')
+    writeFileSync(join(leftovers, 'video.temp.mp4'), 'x')
+    const results = await auditSongsFolder(join(root, 'audit'), { probe: true })
+    const issuesOf = (folder: string) => results.find((result) => result.folder === folder)?.issues
+    assert.deepEqual(issuesOf(none), ['no-video'])
+    assert.deepEqual(issuesOf(leftovers), ['no-video', 'leftover-download-files'])
+    assert.deepEqual(issuesOf(mp4), ['needs-vp8-webm'])
+    assert.deepEqual(issuesOf(both), ['multiple-video-files', 'needs-vp8-webm', 'no-start-time'])
   })
 })
