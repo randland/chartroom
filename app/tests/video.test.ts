@@ -239,6 +239,50 @@ describe('convert', () => {
   })
 })
 
+const runCli = (...args: string[]) =>
+  spawnSync(process.execPath, ['--disable-warning=MODULE_TYPELESS_PACKAGE_JSON', 'tools/chm-video.ts', ...args], { encoding: 'utf-8' })
+
+describe('cli', () => {
+  it('rejects non-numeric, out-of-range and zero flag values before touching anything', () => {
+    const folder = makeSong('cli/flags')
+    makeVideo(join(folder, 'video.mp4'), H264, 1, '320x240')
+    for (const flags of [['--max-height', 'abc'], ['--quality', '999'], ['--quality', ''], ['--limit', '0'], ['--limit', '1e3']]) {
+      const result = runCli('convert', '--songs', join(root, 'cli/flags'), ...flags)
+      assert.equal(result.status, 2, flags.join(' '))
+    }
+    assert.equal(existsSync(join(folder, 'video.mp4')), true)
+    assert.equal(existsSync(join(folder, 'video.webm')), false)
+  })
+
+  it('counts --limit against songs it converts, not songs that are already OK', () => {
+    const okRoot = join(root, 'cli/limit')
+    for (const name of ['a-ok', 'b-ok']) {
+      const folder = makeSong(`cli/limit/${name}`)
+      makeVideo(join(folder, 'video.webm'), ['-c:v', 'libvpx', '-an'], 1, '320x240')
+    }
+    const pending = makeSong('cli/limit/z-pending')
+    makeVideo(join(pending, 'video.mp4'), H264, 1, '320x240')
+    const result = runCli('convert', '--songs', okRoot, '--limit', '1')
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(existsSync(join(pending, 'video.mp4')), false)
+    assert.equal(existsSync(join(pending, 'video.webm')), true)
+  })
+
+  it('fails loudly when the Songs folder cannot be read', () => {
+    const result = runCli('audit', '--songs', join(root, 'cli/not-a-folder'))
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /ENOENT/)
+  })
+
+  it('flags a VP9 .webm in a default audit but not with --fast', () => {
+    const folder = makeSong('cli/vp9', '[song]\nvideo_start_time = 0\n')
+    makeVideo(join(folder, 'video.webm'), ['-c:v', 'libvpx-vp9', '-an'], 1, '320x240')
+    const songsRoot = join(root, 'cli/vp9')
+    assert.match(runCli('audit', '--songs', songsRoot).stdout, /needs-vp8-webm {1,}\S*cli\/vp9/)
+    assert.doesNotMatch(runCli('audit', '--songs', songsRoot, '--fast').stdout, /needs-vp8-webm {1,}\S*cli\/vp9/)
+  })
+})
+
 describe('clean', () => {
   it('removes download fragments, keeps real videos and backups, honors dry run', async () => {
     const folder = makeSong('clean/song', '[song]\n')
