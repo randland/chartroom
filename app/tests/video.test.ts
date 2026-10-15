@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import { auditSongsFolder } from '../src/main/core/video/audit.ts'
 import { cleanLeftovers } from '../src/main/core/video/clean.ts'
+import { convertSongVideo, filesToRemoveAfterWrite } from '../src/main/core/video/convert.ts'
+import { isVp8Webm, probeVideo } from '../src/main/core/video/probe.ts'
 import { readVideoStartTime, writeVideoStartTime } from '../src/main/core/video/songini.ts'
 
 let root: string
@@ -120,6 +122,120 @@ describe('audit', () => {
     assert.deepEqual(issuesOf(leftovers), ['no-video', 'leftover-download-files'])
     assert.deepEqual(issuesOf(mp4), ['needs-vp8-webm'])
     assert.deepEqual(issuesOf(both), ['multiple-video-files', 'needs-vp8-webm', 'no-start-time'])
+  })
+})
+
+describe('convert', () => {
+  it('converts mp4 to VP8 webm, downscales, drops audio, keeps song.ini, removes mp4', async () => {
+    const folder = makeSong('convert/ok', '[song]\nvideo_start_time = -1200\n')
+    makeVideo(join(folder, 'video.mp4'), H264)
+    const result = await convertSongVideo(folder)
+    assert.equal(result.status, 'converted', result.error)
+    assert.equal(existsSync(join(folder, 'video.mp4')), false)
+    const probe = await probeVideo(join(folder, 'video.webm'))
+    assert.ok(probe && isVp8Webm(probe))
+    assert.equal(probe.hasAudio, false)
+    assert.equal(probe.height, 720)
+    assert.equal(await readVideoStartTime(folder), -1200)
+    assert.equal(existsSync(join(folder, 'video.webm.part')), false)
+  })
+
+  it('does not upscale small videos', async () => {
+    const folder = makeSong('convert/small')
+    makeVideo(join(folder, 'video.mp4'), H264, 1, '320x240')
+    await convertSongVideo(folder)
+    assert.equal((await probeVideo(join(folder, 'video.webm')))?.height, 240)
+  })
+
+  it('leaves everything alone on dry run and when already OK', async () => {
+    const folder = makeSong('convert/dry')
+    makeVideo(join(folder, 'video.mp4'), H264)
+    assert.equal((await convertSongVideo(folder, { dryRun: true })).status, 'dry-run')
+    assert.equal(existsSync(join(folder, 'video.mp4')), true)
+    await convertSongVideo(folder)
+    assert.equal((await convertSongVideo(folder)).status, 'already-ok')
+  })
+
+  it('removes a leftover mp4 when a valid video.webm exists', async () => {
+    const folder = makeSong('convert/dupe')
+    makeVideo(join(folder, 'video.mp4'), H264)
+    makeVideo(join(folder, 'video.webm'), ['-c:v', 'libvpx', '-an'])
+    const result = await convertSongVideo(folder)
+    assert.equal(result.status, 'cleaned-duplicates', result.error)
+    assert.equal(existsSync(join(folder, 'video.mp4')), false)
+  })
+
+  it('keeps an unreadable duplicate instead of deleting it next to a valid video.webm', async () => {
+    const folder = makeSong('convert/dupe-unreadable')
+    makeVideo(join(folder, 'video.webm'), ['-c:v', 'libvpx', '-an'])
+    writeFileSync(join(folder, 'video.mp4'), 'truncated')
+    const result = await convertSongVideo(folder)
+    assert.equal(result.status, 'failed')
+    assert.equal(existsSync(join(folder, 'video.mp4')), true)
+    assert.equal(existsSync(join(folder, 'video.webm')), true)
+  })
+
+  it('reports a failed result instead of throwing on I/O errors', async () => {
+    assert.equal((await convertSongVideo(join(root, 'convert/does-not-exist'))).status, 'failed')
+
+    const folder = makeSong('convert/no-ffmpeg')
+    writeFileSync(join(folder, 'video.mp4'), 'x')
+    const originalPath = process.env.PATH
+    process.env.PATH = ''
+    try {
+      const result = await convertSongVideo(folder)
+      assert.equal(result.status, 'failed')
+      assert.match(result.error ?? '', /ffprobe/)
+    } finally {
+      process.env.PATH = originalPath
+    }
+    assert.equal(existsSync(join(folder, 'video.mp4')), true)
+  })
+
+  it('never lists the written output for deletion, whatever its case on disk', () => {
+    const videoFilesBefore = ['Video.MP4', 'Video.WEBM']
+    const caseInsensitiveListing = ['Video.MP4', 'song.ini', 'video.webm']
+    assert.deepEqual(filesToRemoveAfterWrite(videoFilesBefore, caseInsensitiveListing), ['Video.MP4'])
+    const caseSensitiveListing = ['Video.MP4', 'Video.WEBM', 'song.ini', 'video.webm']
+    assert.deepEqual(filesToRemoveAfterWrite(videoFilesBefore, caseSensitiveListing), ['Video.MP4', 'Video.WEBM'])
+    const filesystemKeptOldCasing = ['Video.MP4', 'Video.WEBM', 'song.ini']
+    assert.deepEqual(filesToRemoveAfterWrite(videoFilesBefore, filesystemKeptOldCasing), ['Video.MP4'])
+  })
+
+  it('does not delete a second video it never verified', async () => {
+    const folder = makeSong('convert/extra-differs')
+    makeVideo(join(folder, 'video.avi'), ['-c:v', 'mpeg4', '-c:a', 'mp2'], 6, '320x240')
+    makeVideo(join(folder, 'video.mp4'), H264, 2, '320x240')
+    const result = await convertSongVideo(folder)
+    assert.equal(result.status, 'failed')
+    assert.match(result.error ?? '', /differs from video\.avi/)
+    assert.equal(existsSync(join(folder, 'video.mp4')), true)
+    assert.equal(existsSync(join(folder, 'video.webm')), false)
+
+    const unreadableFolder = makeSong('convert/extra-unreadable')
+    makeVideo(join(unreadableFolder, 'video.avi'), ['-c:v', 'mpeg4', '-c:a', 'mp2'], 2, '320x240')
+    writeFileSync(join(unreadableFolder, 'video.mp4'), 'truncated')
+    assert.equal((await convertSongVideo(unreadableFolder)).status, 'failed')
+    assert.equal(existsSync(join(unreadableFolder, 'video.mp4')), true)
+  })
+
+  it('measures video length from the video stream when the audio is longer and durations are unlabelled', async () => {
+    const folder = makeSong('convert/long-audio')
+    const result = spawnSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=duration=2:size=320x240:rate=10',
+      '-f', 'lavfi', '-i', 'sine=duration=8', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', join(folder, 'video.mkv')])
+    assert.equal(result.status, 0, result.stderr?.toString())
+    const probe = await probeVideo(join(folder, 'video.mkv'))
+    assert.ok(probe && Math.abs(probe.videoDurationSeconds - 2) < 0.5, `got ${probe?.videoDurationSeconds}`)
+    assert.equal((await convertSongVideo(folder)).status, 'converted')
+  })
+
+  it('keeps the original when the source is unreadable', async () => {
+    const folder = makeSong('convert/corrupt')
+    writeFileSync(join(folder, 'video.mp4'), 'not a video')
+    const result = await convertSongVideo(folder)
+    assert.equal(result.status, 'failed')
+    assert.equal(existsSync(join(folder, 'video.mp4')), true)
+    assert.equal(existsSync(join(folder, 'video.webm')), false)
   })
 })
 
