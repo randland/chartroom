@@ -162,6 +162,7 @@ last. Each ticket: (a) characterization tests against the TS module, (b) port to
 | P1.1 | `shared/types.ts` → `types.js` (`@typedef` for every interface; `RendererApi` documented as the IPC contract), `errors`, `songid`, `foldertemplate`, `utils` | `songid` keys and normalisation, folder template rendering, `userMsg` mapping | Sonnet |
 | P1.2 | `platform`, `proc`, `filetype`, `filemeta`, `roots` | `cleanChildEnv` (AppImage vars), `resolveRel`/`toRel` incl. `::id` extra folders and traversal rejection | Sonnet |
 | P1.3 | `songmeta`, `chartlevels`, `sngextract`, `sngpreview` | song.ini round-trip (CRLF, unknown keys, `$` in values); `.mid`/`.chart` level fixtures incl. running status and wrong track lengths; GHL ranges | Sonnet |
+| P1.3b | `main/core/video/*`, `tools/chm-video` | existing `video.test.ts` (see below) | Sonnet |
 | P1.4 | `playlists` | `.setlist` encode/decode byte-exact against fixture files; lock + atomic write | Sonnet |
 | P1.5 | `extractor`, `converter` | argument building (`-p`, `--`), CRC-tolerance decision, `ensurePsTarget` for DTX, ASCII staging path choice | Sonnet |
 | P1.6 | `enchor`, `rhythmverse`, `spotify`, `preview` | `normalizeSong` fixtures from captured API JSON (store under `tests/fixtures/api/`), paging limits, dedup, joke-year filter | Sonnet |
@@ -171,8 +172,23 @@ last. Each ticket: (a) characterization tests against the TS module, (b) port to
 | P1.10 | `gamedetect`, `jobs`, `autoupdate`, `update`, `config`, `hotkeys`, `menu`, `tray`, `reminder`, `overlay` | config defaults/merge; job state machine with injected steps; game path candidates per OS | Sonnet |
 | P1.11 | `ipc.ts` → `main/ipc/*.js` split by domain (`library`, `catalog`, `jobs`, `player`, `config`, `system`, `video`), business logic moved out (e.g. the "Both" merge into `catalog`), lightweight argument validation helpers; `preload/index.js`; `index.js` | an IPC registration test asserting every `RendererApi` member has a handler | Sonnet |
 
-Also port `src/main/core/video/*` (already Electron-free) into JS in P1.3's style; its tests are already
-characterization tests.
+#### P1.3b Video backend (Sonnet, one commit per module)
+Ports `src/main/core/video/*` and `tools/chm-video.ts` from TypeScript to JS + JSDoc. The modules are already
+Electron-free and `tests/video.test.ts` already holds their characterization tests, so there is nothing to write first.
+Go module by module, in the same order as the original PR, so each diff is small enough to read and understand:
+`tools`, `probe`, `songini`, `audit`, `clean`, `convert`, then the CLI. Per commit:
+- Rename `.ts` to `.js` (use `git mv` so history follows), drop the types, add `@param`/`@returns`/`@typedef` JSDoc
+  and `// @ts-check`. Interfaces such as `VideoProbe`, `ConvertOptions` and `ConvertResult` become `@typedef`s next to
+  the function that returns them (or in `shared/types.js` if another module uses them).
+- Keep behaviour byte for byte (rule 3). The existing tests must pass unchanged apart from the import path.
+- Keep the English comments that explain *why* (case-insensitive filesystems, latin1 round trip, why originals are
+  deleted last); drop any that only restate the code.
+- Update `docs/upstream/file-map.md` (these files have no upstream counterpart, so just note they are fork-only).
+- `songini.js` stays its own module here. Merging it into `songmeta` is P1.12 item 8, a behaviour change with its own
+  test. Do not do it in this ticket.
+- **Accept:** `npm run typecheck` (with `checkJs`), `npm test` green, `grep -rn "\.ts'" src/main/core/video tools`
+  returns nothing, and `chm-video audit|clean|convert --dry-run` still runs on a small fixture folder.
+- Needs P0.3 first (`checkJs`, Vitest). Independent of the other P1 tickets, so it can be done at any point after P0.3.
 
 #### P1.12 Fixes found by the code review (Sonnet, one commit each, each with a regression test)
 1. `library.ts:297`: nested install folders joined with `\` create a literal `A\B` folder on Linux/macOS. Use `path.join`.
@@ -183,7 +199,7 @@ characterization tests.
 5. `gamedetect.ts:163,234,691`: the upstream author's `G:\` paths. Remove; detect from registry/launcher data only.
 6. `converter.ts` (~`:198-212`): staging dir leaks if `cpSync` throws before the `try`. Move into the `try`.
 7. `librarymgr.ts:552`: `libMoveOut` uses sync `cpSync` and freezes the main process. Use async `cp`.
-8. Three `song.ini` parsers (`songmeta`, `library.ts:130`, video `songini`): merge into `songmeta`.
+8. Three `song.ini` parsers (`songmeta`, `library.ts:130`, video `songini`, ported as is in P1.3b): merge into `songmeta`.
 9. Three copies of `SONG_MARKERS` / library walkers and the rich-text tag regex: one shared module each.
 10. `playlists.ts:40`: `Documents/Clone Hero/Setlists` on every OS: verify the Linux and macOS Clone Hero paths and fix.
 11. Remove the 8 dead exports the review listed (`isGameRunning`, `sendHotkey`, `encodeSetlist`, `converterAvailable`,
@@ -447,7 +463,7 @@ migration (P1.8 migration test pattern). Skip the ticket if G4 finds no data.
 ```
 P0 repo + tooling + CI/release
 P1 backend port (tests first) ──► P1.12 fixes ──► P1.13 toolchain upgrade ──► P1.14-P1.17 Clone Hero + YARG
-                     └──────────► video backend (Phase 6 backend tickets, optional early)
+                     └──────────► P1.3b video backend port (any time after P0.3); Phase 6 backend tickets
 P2 Vue foundation (entry, api layer, base components, stores, shell)
 G1-G5 game checks ──► P3 specs (user reviews each) ──► P4 screens ──► P5 parity + cut-over (2.0.0) ──► P6 video UI
 ```
