@@ -17,7 +17,9 @@
     "dist": "node build/build-catalog-seed.cjs && electron-vite build && electron-builder --win nsis",
     "dist:portable": "node build/build-catalog-seed.cjs && electron-vite build && electron-builder --win portable",
     "dist:mac": "node build/build-catalog-seed.cjs && electron-vite build && electron-builder --mac",
-    "dist:linux": "node build/build-catalog-seed.cjs && electron-vite build && electron-builder --linux"
+    "dist:linux": "node build/build-catalog-seed.cjs && electron-vite build && electron-builder --linux",
+    "video": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tools/chm-video.ts",
+    "test:video": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/video.test.ts"
   },
   "build": {
     "appId": "com.zipeek.chm",

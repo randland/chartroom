@@ -6,6 +6,7 @@
     "moduleResolution": "Bundler",
     "esModuleInterop": true,
     "strict": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "types": ["node", "electron-vite/node"],
@@ -18,6 +19,8 @@
     "src/main/**/*",
     "src/preload/**/*",
     "src/shared/**/*",
+    "tools/**/*",
+    "tests/**/*",
     "electron.vite.config.ts"
   ]
 }
